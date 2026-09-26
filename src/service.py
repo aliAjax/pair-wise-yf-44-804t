@@ -12,6 +12,8 @@ class DomainService:
         self.audit = AuditTrail(repository)
 
     def _lookup(self, kind, field, value):
+        if kind == "audit":
+            return self.repository.list_audit(entity_id=value)
         return self.repository.find_entities(self.rules.normalize_kind(kind), field, value)
 
     def health(self):
@@ -45,6 +47,8 @@ class DomainService:
         next_status, patch = self.rules.validate_transition(
             actor, entity, action, dict(data or {}), self._lookup
         )
+        if self.rules.is_redundant(entity, action):
+            return entity
         merged = dict(entity["data"])
         merged.update(patch)
         updated = self.repository.update_entity(entity_id, expected, next_status, merged)

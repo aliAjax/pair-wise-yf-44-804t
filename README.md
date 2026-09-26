@@ -24,7 +24,15 @@ python3 app.py --db ./data.db --port 8310
 
 ## 核心对象
 
-- `unit`：装置运行状态；`change`：变更申请；`action_item`：风险控制行动项。
+- `unit`：装置运行状态；`change`：变更申请；`action_item`：风险控制行动项；`signoff_item`：评估阶段的会签清单项。
+
+## 会签与投产规则
+
+- 变更进入`assessed`后才能创建`signoff_item`，每项必须写明`owner`（负责人）和`due_date`（完成时间，ISO日期）。
+- 会签项通过`sign`动作签认，只有该项负责人本人（或`admin`）可以签。
+- `approve`除了要求足够数量的不同审批人，还要求会签清单非空且全部签认完成，否则退回并在错误中列出未完成项。
+- 变更批准后，若装置停过机（含停机后已恢复）或处于`frozen`，`commission`前必须由安全岗位执行`reconfirm`重新确认控制措施，确认记录写入审计；未确认直接投产会被拒绝。
+- `reconfirm`是幂等的：重复提交返回当前状态，不产生新的版本或审计记录。
 
 ## 主要接口
 
