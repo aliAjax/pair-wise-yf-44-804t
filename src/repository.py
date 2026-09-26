@@ -142,7 +142,7 @@ class SQLiteRepository:
 
     def append_audit(self, entity_id, actor_id, actor_role, action, from_status, to_status, detail):
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 "INSERT INTO audit_log(entity_id, actor_id, actor_role, action, from_status, to_status, detail, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
@@ -156,6 +156,7 @@ class SQLiteRepository:
                     utcnow(),
                 ),
             )
+            return cursor.lastrowid
 
     def list_audit(self, entity_id=None):
         with self._connect() as connection:

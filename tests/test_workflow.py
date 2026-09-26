@@ -8,18 +8,6 @@ from src.rules import RuleEngine
 from src.service import DomainService
 
 
-def _resolve(value, created):
-    if isinstance(value, str):
-        for key, item in created.items():
-            value = value.replace("{" + key + "}", str(item))
-        return value
-    if isinstance(value, list):
-        return [_resolve(item, created) for item in value]
-    if isinstance(value, dict):
-        return {key: _resolve(item, created) for key, item in value.items()}
-    return value
-
-
 class WorkflowTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -30,28 +18,115 @@ class WorkflowTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def _items(self, change_id):
+        return [
+            item
+            for item in self.service.list("action_item")
+            if item["data"]["change_id"] == change_id
+        ]
+
+    def _countersign_and_verify(self, change_id):
+        items = self._items(change_id)
+        self.assertTrue(items)
+        for item in items:
+            claimed = self.service.transition(
+                Actor("S-%s" % item["id"][:4], "safety"),
+                item["id"],
+                "claim",
+                {},
+            )
+            self.assertEqual(claimed["status"], "claimed")
+            signed = self.service.transition(
+                Actor("S-%s" % item["id"][:4], "safety"),
+                item["id"],
+                "sign",
+                {},
+            )
+            self.assertEqual(signed["status"], "signed")
+            completed = self.service.transition(
+                self.actor,
+                item["id"],
+                "complete",
+                {"completed_by": item["data"]["owner"], "evidence": "log"},
+            )
+            self.assertEqual(completed["status"], "completed")
+            verified = self.service.transition(
+                Actor("V-1", "verifier"),
+                item["id"],
+                "verify",
+                {"verifier": "V-1"},
+            )
+            self.assertEqual(verified["status"], "verified")
+
     def test_full_workflow(self):
-        created = {}
-        steps = [{'op': 'create', 'as': 'unit', 'kind': 'unit', 'data': {'name': 'Reactor-1', 'location': 'Plant-A'}}, {'op': 'create', 'as': 'change', 'kind': 'change', 'data': {'unit_id': '{unit}', 'description': 'Change alarm threshold'}}, {'op': 'transition', 'target': 'change', 'action': 'assess', 'data': {'risk_level': 'medium', 'analyst': 'E-1'}, 'expect': 'assessed'}, {'op': 'transition', 'target': 'change', 'action': 'approve', 'data': {'approvals': ['S-1', 'S-2'], 'permit_id': 'MOC-1'}, 'expect': 'approved'}, {'op': 'transition', 'target': 'change', 'action': 'implement', 'data': {'procedure_version': 'v2'}, 'expect': 'implemented'}, {'op': 'create', 'as': 'item', 'kind': 'action_item', 'data': {'change_id': '{change}', 'description': 'Train operators', 'owner': 'O-1'}}, {'op': 'transition', 'target': 'item', 'action': 'complete', 'data': {'completed_by': 'O-1', 'evidence': 'training-log'}, 'expect': 'completed'}, {'op': 'transition', 'target': 'item', 'action': 'verify', 'data': {'verifier': 'V-1'}, 'expect': 'verified'}, {'op': 'transition', 'target': 'change', 'action': 'commission', 'data': {'tests_passed': True}, 'expect': 'commissioned'}, {'op': 'transition', 'target': 'change', 'action': 'rollback', 'data': {'reason': 'unexpected drift'}, 'expect': 'rolled_back'}]
-        for step in steps:
-            if step["op"] == "create":
-                entity = self.service.create(
-                    self.actor,
-                    step["kind"],
-                    _resolve(step.get("data", {}), created),
-                    step.get("idempotency_key"),
-                )
-                created[step["as"]] = entity["id"]
-            else:
-                entity = self.service.transition(
-                    self.actor,
-                    created[step["target"]],
-                    step["action"],
-                    _resolve(step.get("data", {}), created),
-                    step.get("expected_version"),
-                )
-            if "expect" in step:
-                self.assertEqual(entity["status"], step["expect"])
+        unit = self.service.create(
+            self.actor,
+            "unit",
+            {"name": "Reactor-1", "location": "Plant-A"},
+        )
+        change = self.service.create(
+            self.actor,
+            "change",
+            {"unit_id": unit["id"], "description": "Change alarm threshold"},
+        )
+        assessed = self.service.transition(
+            self.actor,
+            change["id"],
+            "assess",
+            {
+                "risk_level": "medium",
+                "analyst": "E-1",
+                "checklist": [
+                    {
+                        "description": "Train operators",
+                        "owner": "O-1",
+                        "due_date": "2026-10-01",
+                    },
+                    {
+                        "description": "Update interlock test",
+                        "owner": "O-2",
+                        "due_date": "2026-10-05",
+                    },
+                ],
+            },
+        )
+        self.assertEqual(assessed["status"], "assessed")
+        self.assertEqual(len(assessed["data"]["checklist_item_ids"]), 2)
+
+        self._countersign_and_verify(change["id"])
+
+        approved = self.service.transition(
+            self.actor,
+            change["id"],
+            "approve",
+            {"permit_id": "MOC-1"},
+        )
+        self.assertEqual(approved["status"], "approved")
+
+        implemented = self.service.transition(
+            self.actor,
+            change["id"],
+            "implement",
+            {"procedure_version": "v2"},
+        )
+        self.assertEqual(implemented["status"], "implemented")
+
+        # The unit stayed operating, so no safety reconfirmation is required.
+        commissioned = self.service.transition(
+            self.actor,
+            change["id"],
+            "commission",
+            {"tests_passed": True},
+        )
+        self.assertEqual(commissioned["status"], "commissioned")
+
+        rolled_back = self.service.transition(
+            self.actor,
+            change["id"],
+            "rollback",
+            {"reason": "unexpected drift"},
+        )
+        self.assertEqual(rolled_back["status"], "rolled_back")
 
 
 if __name__ == "__main__":

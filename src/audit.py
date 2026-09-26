@@ -10,7 +10,7 @@ class AuditTrail:
         self.repository = repository
 
     def record(self, entity_id, actor, action, from_status, to_status, detail=None):
-        self.repository.append_audit(
+        return self.repository.append_audit(
             entity_id=entity_id,
             actor_id=actor.user_id,
             actor_role=actor.role,
